@@ -1728,10 +1728,10 @@ zk.ev.on('group-participants.update', async (group) => {
                 console.log("bmb tech is Online 🕸\n\n");
                 //chargement des commandes 
                 console.log("Loading bmb tech Commands ...\n");
-                fs.readdirSync(__dirname + "/bmbtech").forEach((fichier) => {
+                fs.readdirSync(__dirname + "/scs").forEach((fichier) => {
                     if (path.extname(fichier).toLowerCase() == (".js")) {
                         try {
-                            require(__dirname + "/bmbtech/" + fichier);
+                            require(__dirname + "/scs/" + fichier);
                             console.log(fichier + " Installed Successfully✔️");
                         }
                         catch (e) {
