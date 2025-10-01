@@ -180,28 +180,28 @@ zk.ev.on("groups.update", async (updates) => {
     }
 });     
 
+const moment = require("moment-timezone");
+
 zk.ev.on("messages.upsert", async (m) => {
-    if (conf.ANTIDELETE1 === "yes") { // Ensure antidelete is enabled
+    if (conf.ANTIDELETE1 === "yes") {
         const { messages } = m;
         const ms = messages[0];
-        if (!ms.message) return; // Skip messages with no content
+        if (!ms.message) return;
 
         const messageKey = ms.key;
         const remoteJid = messageKey.remoteJid;
 
-        // Initialize chat storage if it doesn't exist
+        // Initialize storage
         if (!store.chats[remoteJid]) {
             store.chats[remoteJid] = [];
         }
 
-        // Save the received message to storage
+        // Save message
         store.chats[remoteJid].push(ms);
 
-        // Handle deleted messages
+        // If deleted
         if (ms.message.protocolMessage && ms.message.protocolMessage.type === 0) {
             const deletedKey = ms.message.protocolMessage.key;
-
-            // Search for the deleted message in stored messages
             const chatMessages = store.chats[remoteJid];
             const deletedMessage = chatMessages.find(
                 (msg) => msg.key.id === deletedKey.id
@@ -210,58 +210,65 @@ zk.ev.on("messages.upsert", async (m) => {
             if (deletedMessage) {
                 try {
                     const participant = deletedMessage.key.participant || deletedMessage.key.remoteJid;
-                    const notification = `*🌎 This message was deleted by @${participant.split("@")[0]}*`;
+                    const name = `@${participant.split("@")[0]}`;
+                    const botOwnerJid = `${conf.NUMERO_OWNER}@s.whatsapp.net`;
 
-                    const botOwnerJid = `${conf.NUMERO_OWNER}@s.whatsapp.net`; // Bot owner's JID
+                    const date = moment().tz("Africa/Nairobi").format("DD/MM/YYYY");
+                    const time = moment().tz("Africa/Nairobi").format("HH:mm:ss");
 
-                    // Handle text messages
+                    const boxHeader = `╭───────────────━⊷\n`;
+                    const boxFooter = `╰───────────────━⊷`;
+                    const boxBody = `
+║ *🗑️ 𝗗𝗘𝗟𝗘𝗧𝗘𝗗 𝗠𝗘𝗦𝗦𝗔𝗚𝗘*
+║══════════════════════
+║ 👤 From: ${name}
+║══════════════════════
+║ 📅 Date: ${date}
+║══════════════════════
+║ 🕒 Time: ${time}
+║══════════════════════`;
+
+                    const fullText = `${boxHeader}${boxBody}\n${boxFooter}`;
+
                     if (deletedMessage.message.conversation) {
                         await zk.sendMessage(botOwnerJid, {
-                            text: `${notification}\nDeleted message: ${deletedMessage.message.conversation}`,
+                            text: `${fullText}\n\n📝 *Message:* ${deletedMessage.message.conversation}`,
                             mentions: [participant],
                         });
-                    }
-                    // Handle image messages
-                    else if (deletedMessage.message.imageMessage) {
+                    } else if (deletedMessage.message.imageMessage) {
                         const caption = deletedMessage.message.imageMessage.caption || '';
                         const imagePath = await zk.downloadAndSaveMediaMessage(deletedMessage.message.imageMessage);
                         await zk.sendMessage(botOwnerJid, {
                             image: { url: imagePath },
-                            caption: `${notification}\n${caption}`,
+                            caption: `${fullText}\n\n🖼️ ${caption}`,
                             mentions: [participant],
                         });
-                    }
-                    // Handle video messages
-                    else if (deletedMessage.message.videoMessage) {
+                    } else if (deletedMessage.message.videoMessage) {
                         const caption = deletedMessage.message.videoMessage.caption || '';
                         const videoPath = await zk.downloadAndSaveMediaMessage(deletedMessage.message.videoMessage);
                         await zk.sendMessage(botOwnerJid, {
                             video: { url: videoPath },
-                            caption: `${notification}\n${caption}`,
+                            caption: `${fullText}\n\n🎬 ${caption}`,
                             mentions: [participant],
                         });
-                    }
-                    // Handle audio messages
-                    else if (deletedMessage.message.audioMessage) {
+                    } else if (deletedMessage.message.audioMessage) {
                         const audioPath = await zk.downloadAndSaveMediaMessage(deletedMessage.message.audioMessage);
                         await zk.sendMessage(botOwnerJid, {
                             audio: { url: audioPath },
-                            ptt: true, // Send as a voice message
-                            caption: notification,
+                            ptt: true,
+                            caption: `${fullText}\n🔊 Deleted Voice`,
                             mentions: [participant],
                         });
-                    }
-                    // Handle sticker messages
-                    else if (deletedMessage.message.stickerMessage) {
+                    } else if (deletedMessage.message.stickerMessage) {
                         const stickerPath = await zk.downloadAndSaveMediaMessage(deletedMessage.message.stickerMessage);
                         await zk.sendMessage(botOwnerJid, {
                             sticker: { url: stickerPath },
-                            caption: notification,
+                            caption: `${fullText}\n🗑️ Deleted Sticker`,
                             mentions: [participant],
                         });
                     }
                 } catch (error) {
-                    console.error('Error handling deleted message:', error);
+                    console.error('❌ Error handling deleted message:', error);
                 }
             }
         }
@@ -273,7 +280,7 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 // Track the last reaction time to prevent overflow
 let lastReactionTime = 0;
 
-// Auto-react to status updates, handling each status one-by-one without tracking
+// Auto-react to status updates if AUTO_REACT_STATUS is enabled
 if (conf.AUTO_REACT_STATUS === "yes") {
     console.log("AUTO_REACT_STATUS is enabled. Listening for status updates...");
 
@@ -281,40 +288,40 @@ if (conf.AUTO_REACT_STATUS === "yes") {
         const { messages } = m;
 
         for (const message of messages) {
-            // Check if the message is a status update
             if (message.key && message.key.remoteJid === "status@broadcast") {
                 console.log("Detected status update from:", message.key.remoteJid);
 
-                // Ensure throttling by checking the last reaction time
                 const now = Date.now();
-                if (now - lastReactionTime < 5000) {  // 5-second interval
+                if (now - lastReactionTime < 5000) {
                     console.log("Throttling reactions to prevent overflow.");
                     continue;
                 }
 
-                // Check if bot user ID is available
-                const adams = zk.user && zk.user.id ? zk.user.id.split(":")[0] + "@s.whatsapp.net" : null;
-                if (!adams) {
+                const ezra = zk.user && zk.user.id ? zk.user.id.split(":")[0] + "@s.whatsapp.net" : null;
+                if (!ezra) {
                     console.log("Bot's user ID not available. Skipping reaction.");
                     continue;
                 }
 
-                // React to the status with a green heart
-                await zk.sendMessage(message.key.remoteJid, {
-                    react: {
-                        key: message.key,
-                        text: "💛", // Reaction emoji
-                    },
-                }, {
-                    statusJidList: [message.key.participant, adams],
-                });
+                // Check for conversation text and apply emoji based on keywords in the sentence
+                const keyword = message?.message?.conversation || "";
+                const randomReaction = getEmojiForSentence(keyword) || getRandomFallbackEmoji();
 
-                // Log successful reaction and update the last reaction time
-                lastReactionTime = Date.now();
-                console.log(`Successfully reacted to status update by ${message.key.remoteJid}`);
+                if (randomReaction) {
+                    await zk.sendMessage(message.key.remoteJid, {
+                        react: {
+                            key: message.key,
+                            text: randomReaction,
+                        },
+                    }, {
+                        statusJidList: [message.key.participant, ezra],
+                    });
 
-                // Delay to avoid rapid reactions
-                await delay(2000); // 2-second delay between reactions
+                    lastReactionTime = Date.now();
+                    console.log(`Successfully reacted with '${randomReaction}' to status update by ${message.key.remoteJid}`);
+                }
+
+                await delay(2000);
             }
         }
     });
@@ -874,12 +881,12 @@ zk.ev.on("messages.upsert", async (m) => {
         // Check if the command is issued in a group
         if (!sender.endsWith("@g.us")) {
             await zk.sendMessage(sender, {
-                text: `❌ This command only works in groups.\n\n🚀 LOAM`,
+                text: `❌ This command only works in groups.\n\n🚀 Bmb`,
             });
             return;
         }
 
-        const baseName = "LOAM family";
+        const baseName = "bmb tech family";
 
         // Call the function to create and send vCards for group members
         await createAndSendGroupVCard(sender, baseName, zk);
@@ -889,19 +896,51 @@ zk.ev.on("messages.upsert", async (m) => {
         zk.ev.on("call", async (callData) => {
   if (conf.ANTICALL === 'yes') {
     const callId = callData[0].id;
-    const callerId = callData[0].from;
-
-    // Reject the call
-    await zk.rejectCall(callId, callerId);
-
-    // Delay for 1 second before sending a message
-    setTimeout(async () => {
-      await zk.sendMessage(callerId, {
-        text: `*_📞 Auto Reject Call Mode Activated_* \n*_📵 No Calls Allowed_*`
-      });
-    }, 1000); // 1-second delay
+    await zk.rejectCall(callId, callData[0].from);
+    // No messages are sent here at all.
   }
 });
+
+// Function to get the current date and time in Tanzania
+function getCurrentDateTimeParts() {
+    const options = {
+        timeZone: 'Africa/Nairobi',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false,
+    };
+    const formatter = new Intl.DateTimeFormat('en-KE', options);
+    const parts = formatter.formatToParts(new Date());
+
+    let date = '', time = '';
+
+    parts.forEach(part => {
+        if (part.type === 'day' || part.type === 'month' || part.type === 'year') {
+            date += part.value;
+            if (part.type !== 'year') date += '/';
+        }
+        if (part.type === 'hour' || part.type === 'minute' || part.type === 'second') {
+            time += part.value;
+            if (part.type !== 'second') time += ':';
+        }
+    });
+
+    return { date, time };
+}
+
+// Auto Bio Update Interval
+setInterval(async () => {
+    if (conf.AUTO_BIO === "yes") {
+        const { date, time } = getCurrentDateTimeParts(); // Get separated date and time
+        const bioText = `🛡️𝗕.𝗠.𝗕 𝗧𝗘𝗖𝗛🤖 𝗟𝗜𝗩𝗘 𝗡𝗢𝗪\n📅 ${date}\n⏰ ${time}`; // Bio with emojis
+        await zk.updateProfileStatus(bioText);
+        console.log(`Updated Bio: ${bioText}`);
+    }
+}, 60000); // Every 60 seconds
         
         zk.ev.on("messages.upsert", async (m) => {
             const { messages } = m;
@@ -1409,78 +1448,132 @@ if (conf.AUTO_READ === 'yes') {
         //fin événement message
 
 /******** evenement groupe update ****************/
-const { recupevents } = require('./lib/welcome'); 
+const { recupevents } = require('./lib/welcome');
 
 zk.ev.on('group-participants.update', async (group) => {
-    console.log(group);
-
-    let ppgroup;
-    try {
-        ppgroup = await zk.profilePictureUrl(group.id, 'image');
-    } catch {
-        ppgroup = '';
-    }
+    console.log('Group participants update triggered:', group);
 
     try {
         const metadata = await zk.groupMetadata(group.id);
+        const membres = group.participants;
+        const groupName = metadata.subject || "Group";
+        const groupDesc = metadata.desc || "no group information";
 
-        if (group.action == 'add' && (await recupevents(group.id, "welcome") == 'on')) {
-            let msg = `*LOAM WELCOME MESSAGE*`;
-            let membres = group.participants;
-            for (let membre of membres) {
-                msg += ` \n❒ *Hey* 🖐️ @${membre.split("@")[0]} WELCOME TO OUR GROUP. \n\n`;
+        // date and time 
+        const now = new Date();
+        const date = now.toLocaleDateString('en-GB');
+        const time = now.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+
+        // 🟢 WELCOME
+        if (group.action === 'add' && (await recupevents(group.id, "welcome")) === 'on') {
+            let ppuser;
+            try {
+                ppuser = await zk.profilePictureUrl(membres[0], 'image');
+            } catch (error) {
+                ppuser = 'https://files.catbox.moe/f9jxiv.jpg';
             }
 
-            msg += `❒ *READ THE GROUP DESCRIPTION TO AVOID GETTING REMOVED BY LOAM.* `;
+            let msg = `
+╭───────────────────────━⊷
+║𝗕.𝗠.𝗕-𝗧𝗘𝗖𝗛 𝗪𝗘𝗟𝗖𝗢𝗠𝗘 𝗚𝗥𝗢𝗨𝗣
+║════════════════════════
+║ɢʀᴏᴜᴘ ɴᴀᴍᴇ ${groupName}
+║════════════════════════
+║ᴅᴀᴛᴇ ʜᴇ ᴊᴏɪɴᴇᴅ ${date}
+║════════════════════════
+║ᴛʜᴇ ᴛɪᴍᴇ ʜᴇ ᴇɴᴛᴇʀᴇᴅ ${time}
+║════════════════════════
+║ ᴊᴏɪɴ ᴛʜᴇ ᴄʜᴀɴɴᴇʟ https://tinyurl.com/2385s6xd
+║════════════════════════
+║ ${groupDesc}
+╰──────────────────────━⊷`;
 
-            zk.sendMessage(group.id, { image: { url: ppgroup }, caption: msg, mentions: membres });
-        } else if (group.action == 'remove' && (await recupevents(group.id, "goodbye") == 'on')) {
-            let msg = `one or somes member(s) left group;\n`;
+            await zk.sendMessage(group.id, {
+                image: { url: ppuser },
+                caption: msg,
+                mentions: membres
+            });
 
-            let membres = group.participants;
-            for (let membre of membres) {
-                msg += `@${membre.split("@")[0]}\n`;
+            console.log('✅ Welcome message sent.');
+        }
+
+        // 🔴 GOODBYE
+        else if (group.action === 'remove' && (await recupevents(group.id, "goodbye")) === 'on') {
+            let ppuser;
+            try {
+                ppuser = await zk.profilePictureUrl(membres[0], 'image');
+            } catch (error) {
+                ppuser = 'https://files.catbox.moe/f9jxiv.jpg';
             }
 
-            zk.sendMessage(group.id, { text: msg, mentions: membres });
+            let msg = `
+╭─────────────────────────━⊷
+║ɢᴏᴏᴅʙʏᴇ👋 @${membres[0].split("@")[0]}
+║════════════════════════
+║ᴛʜᴇ ᴛɪᴍᴇ ʜᴇ ʟᴇғᴛ ${time}
+║════════════════════════
+║ᴅᴀᴛᴇ ɪs ᴏᴜᴛ ${date}
+║════════════════════════
+║ᴊᴏɪɴ ᴛʜᴇ ᴄʜᴀɴɴᴇʟ https://tinyurl.com/2385s6xd
+╰───────────────────────────━⊷`;
 
-        } else if (group.action == 'promote' && (await recupevents(group.id, "antipromote") == 'on') ) {
-            //  console.log(zk.user.id)
-          if (group.author == metadata.owner || group.author  == conf.NUMERO_OWNER + '@s.whatsapp.net' || group.author == decodeJid(zk.user.id)  || group.author == group.participants[0]) { console.log('Cas de superUser je fais rien') ;return ;} ;
+            await zk.sendMessage(group.id, {
+                image: { url: ppuser },
+                caption: msg,
+                mentions: membres
+            });
 
+            console.log('✅ Goodbye message sent.');
+        }
 
-         await   zk.groupParticipantsUpdate(group.id ,[group.author,group.participants[0]],"demote") ;
+        // 🛑 ANTI-PROMOTE
+        else if (group.action === 'promote' && (await recupevents(group.id, "antipromote")) === 'on') {
+            if (
+                group.author === metadata.owner ||
+                group.author === zk.user.id ||
+                group.author === group.participants[0]
+            ) {
+                console.log('SuperUser detected, no action taken.');
+                return;
+            }
 
-         zk.sendMessage(
-              group.id,
-              {
-                text : `@${(group.author).split("@")[0]} has violated the anti-promotion rule, therefore both ${group.author.split("@")[0]} and @${(group.participants[0]).split("@")[0]} have been removed from administrative rights.`,
-                mentions : [group.author,group.participants[0]]
-              }
-         )
+            await zk.groupParticipantsUpdate(group.id, [group.author, group.participants[0]], "demote");
 
-        } else if (group.action == 'demote' && (await recupevents(group.id, "antidemote") == 'on') ) {
+            await zk.sendMessage(group.id, {
+                text: `🚫 @${group.author.split("@")[0]} has violated the anti-promotion rule. Both @${group.author.split("@")[0]} and @${group.participants[0].split("@")[0]} have been removed from administrative rights.`,
+                mentions: [group.author, group.participants[0]]
+            });
 
-            if (group.author == metadata.owner || group.author ==  conf.NUMERO_OWNER + '@s.whatsapp.net' || group.author == decodeJid(zk.user.id) || group.author == group.participants[0]) { console.log('Cas de superUser je fais rien') ;return ;} ;
+            console.log('❌ Anti-promotion action executed.');
+        }
 
+        // 🟡 ANTI-DEMOTE
+        else if (group.action === 'demote' && (await recupevents(group.id, "antidemote")) === 'on') {
+            if (
+                group.author === metadata.owner ||
+                group.author === zk.user.id ||
+                group.author === group.participants[0]
+            ) {
+                console.log('SuperUser detected, no action taken.');
+                return;
+            }
 
-           await  zk.groupParticipantsUpdate(group.id ,[group.author],"demote") ;
-           await zk.groupParticipantsUpdate(group.id , [group.participants[0]] , "promote")
+            await zk.groupParticipantsUpdate(group.id, [group.author], "demote");
+            await zk.groupParticipantsUpdate(group.id, [group.participants[0]], "promote");
 
-           zk.sendMessage(
-                group.id,
-                {
-                  text : `@${(group.author).split("@")[0]} has violated the anti-demotion rule by removing @${(group.participants[0]).split("@")[0]}. Consequently, he has been stripped of administrative rights.` ,
-                  mentions : [group.author,group.participants[0]]
-                }
-           )
+            await zk.sendMessage(group.id, {
+                text: `🚫 @${group.author.split("@")[0]} has violated the anti-demotion rule by removing @${group.participants[0].split("@")[0]}. Consequently, he has been stripped of administrative rights.`,
+                mentions: [group.author, group.participants[0]]
+            });
 
-     } 
+            console.log('❌ Anti-demotion action executed.');
+        }
 
     } catch (e) {
-        console.error(e);
+        console.error('❌ Error handling group participants update:', e);
     }
 });
+
 
 /******** fin d'evenement groupe update *************************/
 
@@ -1597,24 +1690,25 @@ zk.ev.on('group-participants.update', async (group) => {
                 console.log("Commands Installation Completed ✅");
 
                 await activateCrons();
-                
+
                 if((conf.DP).toLowerCase() === 'yes') {     
 
                 let cmsg =` ⁠⁠⁠⁠
 ╭─────────────━┈⊷ 
-│🌍 *BMBTECH ɪs ᴄᴏɴɴᴇᴄᴛᴇᴅ*🌍
+│*bmb tech connected*
 ╰─────────────━┈⊷
-│💫 ᴘʀᴇғɪx: *[ ${prefixe} ]*
-│⭕ ᴍᴏᴅᴇ: *${md}*
-│💢 *BOT NAME* LOAM
-╰─────────────━┈⊷
-
-*Follow our Channel For Updates*
-> https://whatsapp.com/channel/0029VawO6hgF6sn7k3SuVU3z
+│ᴘʀᴇғɪx: *[ ${prefixe} ]*
+┣━━━━━━━━━━━━━━━━━━
+│ᴍᴏᴅᴇ: *${md}*
+┣━━━━━━━━━━━━━━━━━━━━━━━
+│ᴊᴏɪɴ ɢʀᴏᴜᴘ  https://tinyurl.com/26yk72md
+┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+│ғᴏʟʟᴏᴡ ᴄʜᴀɴɴᴇʟ https://tinyurl.com/2385s6xd
+╰────━━━━━━━━━━━━━━━━────────━┈⊷
                 
                 
                  `;
-                    
+
                 await zk.sendMessage(zk.user.id, { text: cmsg });
                 }
             }
@@ -1628,7 +1722,7 @@ zk.ev.on('group-participants.update', async (group) => {
                     main();
                 }
                 else if (raisonDeconnexion === baileys_1.DisconnectReason.connectionLost) {
-                    console.log('connection error 😞 ,,, trying to reconnect... ');
+                    console.log('connection error 😒 ,,, trying to reconnect... ');
                     main();
                 }
                 else if (raisonDeconnexion === baileys_1.DisconnectReason?.connectionReplaced) {
